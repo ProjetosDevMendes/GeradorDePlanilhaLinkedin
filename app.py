@@ -1,93 +1,170 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from time import sleep
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import WebDriverException, TimeoutException, NoSuchElementException
+from selenium.webdriver.support import expected_conditions as EC
 from openpyxl import Workbook
-
-
-#abrir Credenciais para acessar o linkedin
+from time import sleep
+import os
 
 def read_credentials(file_path):
-    with open(file_path,"r") as file:
-        lines = file.readlines()
+    credentials = {}
+    try:
+        with open(file_path, "r") as file:
+            lines = file.readlines()
+            for line in lines:
+                key, value = line.strip().split(":")
+                credentials[key] = value
+    except FileNotFoundError:
+        print(f"Erro: arquivo {file_path} não encontrado.")
+    except Exception as e:
+        print(f"Erro ao ler o arquivo de credenciais: {e}")
+    return credentials
 
-        credentials ={}
-        for line in lines:
-            key, value = line.strip().split(":")
-            credentials[key] = value
-        return credentials
+def login(browser, credentials):
+    try:
+        print("Iniciando login no LinkedIn...")
+        browser.get("https://www.linkedin.com/login")
+        
+        # Espera os campos de login aparecerem
+        WebDriverWait(browser, 30).until(EC.presence_of_element_located((By.ID, "username")))
+        
+        email = browser.find_element(By.ID, "username")
+        password = browser.find_element(By.ID, "password")
+        btn_entrar = browser.find_element(By.XPATH, "//button[contains(@class, 'btn__primary')]")
+        
+        email.send_keys(credentials['user'])
+        password.send_keys(credentials['senha'])
+        btn_entrar.click()
+        
+        print("Resolva o captcha no navegador...")
+        input("Resolva o captcha no navegador e pressione ENTER aqui para continuar...")  # Aguarda o usuário resolver o captcha
+        
+        # Verifica se o login foi bem-sucedido
+        WebDriverWait(browser, 40).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".global-nav__me"))
+        )
+        print("Login realizado com sucesso.")
+    except TimeoutException:
+        print("Erro: Timeout ao tentar realizar o login. Verifique se o LinkedIn está acessível ou se os IDs dos campos mudaram.")
+    except NoSuchElementException:
+        print("Erro: Elemento não encontrado durante o login. Verifique a estrutura do site.")
+    except Exception as e:
+        print(f"Erro durante o login: {e}")
+        browser.quit()
 
-file_path_credentials = "credentials.txt"
+def buscar_vagas(browser, search_term):
+    try:
+        print(f"Buscando vagas para '{search_term}'...")
+        browser.get("https://www.linkedin.com/jobs/")
+        
+        # Espera o campo de busca de vagas aparecer
+        WebDriverWait(browser, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "input.jobs-search-box__text-input"))
+        )
+        
+        input_jobs_search = browser.find_element(By.CSS_SELECTOR, "input.jobs-search-box__text-input")
+        input_jobs_search.send_keys(search_term)
+        input_jobs_search.send_keys(Keys.ENTER)
+        
+        # Espera os resultados aparecerem
+        WebDriverWait(browser, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "div.jobs-search-results-list"))
+        )
+        return browser.find_element(By.CSS_SELECTOR, "div.jobs-search-results-list")
+    except TimeoutException:
+        print("Erro: Timeout ao buscar as vagas. Verifique a conexão.")
+    except Exception as e:
+        print(f"Erro durante a busca de vagas: {e}")
+        browser.quit()
 
-credentials = read_credentials(file_path_credentials)
+def coletar_links(browser, ul_element, max_links=25):
+    links = []
+    try:
+        while len(links) < max_links:
+            print(f"Coletando links... Total coletado até agora: {len(links)}")
+            
+            # Scroll na lista de resultados de vagas
+            browser.execute_script("arguments[0].scrollTop += 200;", ul_element)
+            sleep(2)
+            
+            new_links = browser.find_elements(By.XPATH, "//main//div/div//ul//li//a[@data-control-id]")
+            links += [link for link in new_links if link not in links]  # Adiciona somente novos links
+            
+            if len(links) >= max_links:
+                break
 
+        print(f"Número de links encontrados: {len(links)}")
+    except Exception as e:
+        print(f"Erro durante a coleta de links: {e}")
+    return links[:max_links]  # Retorna somente até o limite
 
-print("vamos começar a buscar suas vagas")
-search = input("digite sua busca: ")
+def salvar_em_excel(links, search_term):
+    try:
+        spreadsheet = Workbook()
+        sheet = spreadsheet.active
+        sheet['A1'] = "NOME DA VAGA"
+        sheet['B1'] = "LINK DA VAGA"
+        next_line = 2
+        
+        for link in links:
+            text = link.text
+            url_link = link.get_attribute("href")
+            sheet[f'A{next_line}'] = text
+            sheet[f'B{next_line}'] = url_link
+            next_line += 1
+        
+        file_name = f"vagas_links_{search_term}.xlsx"
+        spreadsheet.save(file_name)
+        print(f"Planilha '{file_name}' criada com sucesso.")
+    except Exception as e:
+        print(f"Erro ao salvar planilha: {e}")
 
+def iniciar_navegador(retries=3, delay=5):
+    chrome_options = Options()
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--start-maximized")  # Abre o navegador maximizado para evitar problemas de visualização
+    
+    service = Service(executable_path="C:/chromedriver/chromedriver.exe")
+    for attempt in range(retries):
+        try:
+            print(f"Tentando iniciar o navegador Chrome... tentativa {attempt + 1}")
+            browser = webdriver.Chrome(service=service, options=chrome_options)
+            sleep(5)
+            return browser
+        except WebDriverException as e:
+            print(f"Erro ao iniciar o navegador: {e}. Tentando novamente em {delay} segundos...")
+            sleep(delay)
+    print("Falha ao iniciar o navegador após múltiplas tentativas.")
+    return None
 
-# inicia o navegador
-browser = webdriver.Chrome()
-browser.get("https://www.linkedin.com/")
-sleep(2)
-email = browser.find_element(By.XPATH, "//input[@id='session_key']")
-password = browser.find_element(By.XPATH, "//input[@id='session_password']")
-btn_entrar = browser.find_element(By.XPATH, "//button[normalize-space(text())='Entrar']")
-sleep(2)
-email.send_keys(credentials['user'])
-sleep(2)
-password.send_keys(credentials['senha'])
-sleep(2)
-btn_entrar.click()
-input("resolva o enigma e volte aqui para pressionar ENTER")
-sleep(5)
-browser.get("https://www.linkedin.com/jobs/")
-sleep(5)
-input_jobs_search = browser.find_element(By.XPATH, "//header//input")
-sleep(5)
-input_jobs_search.send_keys(search)
-sleep(5)
-input_jobs_search.send_keys(Keys.ENTER)
-sleep(5)
-ul_element = browser.find_element(By.CSS_SELECTOR, "main div.jobs-search-results-list")
-sleep(5)
+def main():
+    file_path_credentials = "credentials.txt"
+    credentials = read_credentials(file_path_credentials)
+    
+    if not credentials:
+        print("Credenciais inválidas.")
+        return
+    
+    search_term = input("Digite sua busca: ")
+    browser = iniciar_navegador()
+    
+    if browser:
+        try:
+            login(browser, credentials)
+            ul_element = buscar_vagas(browser, search_term)
+            
+            if ul_element:
+                links = coletar_links(browser, ul_element)
+                if links:
+                    salvar_em_excel(links, search_term)
+        finally:
+            print("Encerrando busca")
+            browser.quit()
 
-
-def scroll_list(pixels):
-    browser.execute_script(f"arguments[0].scrollTop += {pixels};", ul_element)
-    sleep(2)
-
-
-links = []
-for _ in range(25):
-    scroll_list(200)
-    links = browser.find_elements(By.XPATH, "//main//div/div//ul//li//a[@data-control-id]")
-    print(len(links))
-    if len(links) >= 25:
-        print(f'chegamos ao numero esperado de {len(links)}')
-        break
-
-spreadsheet = Workbook()
-
-sheet = spreadsheet.active
-
-sheet['A1'] = "NOME DA VAGA"
-sheet['B1'] = "LINK DA VAGA"
-next_line = sheet.max_row + 1
-
-for link in links:
-    text = link.text
-    url_link = link.get_attribute("href")
-
-    sheet[f'A{next_line}'] = text
-    sheet[f'B{next_line}'] = url_link
-
-    next_line += 1
-
-spreadsheet.save("vagas_links-"+search+".xlsx")
-print("planilha criada")
-
-print("Encerrando busca")
-sleep(3)
-browser.quit()
-
+if __name__ == "__main__":
+    main()

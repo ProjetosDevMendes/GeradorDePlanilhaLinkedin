@@ -1,0 +1,3 @@
+#ingnore arquivos
+.venv
+credentials.txt

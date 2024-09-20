@@ -9,6 +9,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from openpyxl import Workbook
 from time import sleep
 import os
+import platform
+import subprocess
+from webdriver_manager.chrome import ChromeDriverManager  # Importar o webdriver_manager
 
 def read_credentials(file_path):
     credentials = {}
@@ -123,13 +126,46 @@ def salvar_em_excel(links, search_term):
     except Exception as e:
         print(f"Erro ao salvar planilha: {e}")
 
+def verificar_versao_chrome():
+    """Verifica a versão do Chrome instalada e retorna a versão como string."""
+    try:
+        if platform.system() == "Windows":
+            process = subprocess.run(['reg', 'query', 'HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon', '/v', 'version'], capture_output=True, text=True)
+            version_line = process.stdout.split('\n')[2]
+            version = version_line.split()[-1]
+        elif platform.system() == "Darwin":
+            process = subprocess.run(['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '--version'], capture_output=True, text=True)
+            version = process.stdout.split()[-1]
+        else:
+            return None
+        return version
+    except Exception as e:
+        print(f"Erro ao verificar a versão do Chrome: {e}")
+        return None
+
 def iniciar_navegador(retries=3, delay=5):
     chrome_options = Options()
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--start-maximized")  # Abre o navegador maximizado para evitar problemas de visualização
+    chrome_options.add_argument("--start-maximized")
+    chrome_options.add_argument("--headless")  # Modo sem interface gráfica
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--ignore-certificate-errors")
+    chrome_options.add_argument("--allow-running-insecure-content")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-software-rasterizer")
+
+    # Adiciona opções experimentais para tentar forçar compatibilidade
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
+    chrome_options.add_experimental_option("useAutomationExtension", False)
     
-    service = Service(executable_path="C:/chromedriver/chromedriver.exe")
+    # Verifica a versão do Chrome instalado
+    versao_chrome = verificar_versao_chrome()
+    print(f"Versão do Chrome instalada: {versao_chrome}")
+
+    # Usar o webdriver_manager para baixar o Chromedriver mais compatível
+    service = Service(ChromeDriverManager().install())
+
     for attempt in range(retries):
         try:
             print(f"Tentando iniciar o navegador Chrome... tentativa {attempt + 1}")
@@ -139,6 +175,7 @@ def iniciar_navegador(retries=3, delay=5):
         except WebDriverException as e:
             print(f"Erro ao iniciar o navegador: {e}. Tentando novamente em {delay} segundos...")
             sleep(delay)
+
     print("Falha ao iniciar o navegador após múltiplas tentativas.")
     return None
 
